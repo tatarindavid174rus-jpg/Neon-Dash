@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Dash: Cube Rush</title>
+    <!-- Подключение SDK Яндекс Игр -->
+    <script src="https://yandex.ru/games/sdk/v2"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            touch-action: manipulation;
+        }
+        body {
+            background-color: #0b0f19;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #ffffff;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 40px rgba(0, 243, 255, 0.15);
+            border-radius: 12px;
+            overflow: hidden;
+            background: #111827;
+        }
+        canvas {
+            display: block;
+            background: linear-gradient(to bottom, #111827, #1f2937);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="800" height="450"></canvas>
+</div>
+
+<script>
+    let ysdk = null;
+
+    // Инициализация SDK и отправка сигнала о готовности игры
+    YaGames.init().then(_ysdk => {
+        ysdk = _ysdk;
+        ysdk.features.LoadingAPI?.ready();
+    }).catch(err => console.error('SDK initialization error:', err));
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Аудиоконтекст для синтеза звуков (без внешних файлов)
+    let audioCtx = null;
+    function initAudio() {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+    }
+
+    function playSound(type) {
+        if (!audioCtx) return;
+        try {
+            let osc = audioCtx.createOscillator();
+            let gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            let now = audioCtx.currentTime;
+            if (type === 'jump') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(150, now);
+                osc.frequency.exponentialRampToValueAtTime(400, now + 0.15);
+                gain.gain.setValueAtTime(0.15, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
+                osc.start(now);
+                osc.stop(now + 0.15);
+            } else if (type === 'hit') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(120, now);
+                osc.frequency.linearRampToValueAtTime(40, now + 0.3);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+                osc.start(now);
+                osc.stop(now + 0.3);
+            }
+        } catch (e) {
+            // Игнорируем ошибки автозапуска аудиополитики браузера
+        }
+    }
+
+    // Игровые переменные
+    let gameState = 'START'; // START, PLAYING, GAMEOVER
+    let score = 0;
+    let highScore = localStorage.getItem('neon_dash_high') || 0;
+    let gameSpeed = 5;
+
+    const player = {
+        x: 100,
+        y: 320,
+        width: 36,
+        height: 36,
+        vy: 0,
+        gravity: 0.8,
+        jumpForce: -12.5,
+        grounded: false,
+        rotation: 0
+    };
+
+    let obstacles = [];
+    let particles = [];
+    let backgroundParticles = [];
+
+    // Инициализация фоновых частиц
+    for (let i = 0; i < 40; i++) {
+        backgroundParticles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            size: Math.random() * 2 + 1,
+            speed: Math.random() * 1.5 + 0.5
+        });
+    }
+
+    function spawnObstacle() {
+        const types = ['spike', 'block', 'tall'];
+        const type = types[Math.floor(Math.random() * types
+
+
+.length)];
+        let obs = {
+            x: canvas.width,
+            width: 30,
+            height: 35,
+            y: 355,
+            type: type
+        };
+
+        if (type === 'tall') {
+            obs.height = 65;
+            obs.y = 325;
+            obs.width = 25;
+        } else if (type === 'block') {
+            obs.height = 45;
+            obs.y = 345;
+            obs.width = 40;
+        }
+        obstacles.push(obs);
+    }
+
+    function addParticles(x, y, color) {
+        for (let i = 0; i < 12; i++) {
+            particles.push({
+                x: x,
+                y: y,
+                vx: (Math.random() - 0.5) * 6,
+                vy: (Math.random() - 0.5) * 6,
+                size: Math.random() * 4 + 2,
+                color: color,
+                alpha: 1
+            });
+        }
+    }
+
+    function resetGame() {
+        score = 0;
+        gameSpeed = 5;
+        obstacles = [];
+        particles = [];
+        player.y = 320;
+        player.vy = 0;
+        player.rotation = 0;
+        gameState = 'PLAYING';
+    }
+
+    // Управление
+    window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' || e.code === 'ArrowUp') {
+            handleAction();
+        }
+    });
+
+    canvas.addEventListener('click', () => {
+        handleAction();
+    });
+
+    function handleAction() {
+        initAudio();
+        if (gameState === 'START' || gameState === 'GAMEOVER') {
+            resetGame();
+        } else if (gameState === 'PLAYING' && player.grounded) {
+            player.vy = player.jumpForce;
+            player.grounded = false;
+            playSound('jump');
+            addParticles(player.x + player.width / 2, player.y + player.height, '#00f3ff');
+        }
+    }
+
+    let spawnTimer = 0;
+
+    // Главный игровой цикл
+    function update() {
+        if (gameState === 'PLAYING') {
+            score += 0.05;
+            gameSpeed = 5 + Math.floor(score / 10) * 0.5;
+
+            // Логика игрока
+            player.vy += player.gravity;
+            player.y += player.vy;
+
+            // Столкновение с полом
+            if (player.y > 356) {
+                player.y = 356;
+                player.vy = 0;
+                player.grounded = true;
+                player.rotation = Math.round(player.rotation / 90) * 90; // Выравнивание при приземлении
+            } else {
+                player.rotation += 6;
+            }
+
+            // Спавн препятствий
+            spawnTimer++;
+            if (spawnTimer > Math.max(45, 90 - Math.floor(score / 5))) {
+                spawnObstacle();
+                spawnTimer = 0;
+            }
+
+            // Движение препятствий
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].x -= gameSpeed;
+
+                // Проверка столкновений (AABB)
+                if (
+                    player.x < obstacles[i].x + obstacles[i].width &&
+                    player.x + player.width > obstacles[i].x &&
+                    player.y < obstacles[i].y + obstacles[i].height &&
+                    player.y + player.height > obstacles[i].y
+                ) {
+                    playSound('hit');
+                    addParticles(player.x + player.width / 2, player.y + player.height / 2, '#ff0055');
+                    gameState = 'GAMEOVER';
+                    if (Math.floor(score) > highScore) {
+                        highScore = Math.floor(score);
+                        localStorage.setItem('neon_dash_high', highScore);
+                    }
+                }
+
+                // Удаление вышедших за экран
+                if (obstacles[i].x + obstacles[i].width < 0) {
+                    obstacles.splice(i, 1);
+                }
+            }
+        }
+
+        // Обновление частиц
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.alpha -= 0.03;
+            if (p.alpha <= 0) {
+                particles.splice(i, 1);
+            }
+
+
+}
+
+        // Обновление фона
+        backgroundParticles.forEach(p => {
+            p.x -= p.speed * (gameState === 'PLAYING' ? (gameSpeed / 5) : 0.5);
+            if (p.x < 0) p.x = canvas.width;
+        });
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Отрисовка фона (звезды/частицы)
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        backgroundParticles.forEach(p => {
+            ctx.fillRect(p.x, p.y, p.size, p.size);
+        });
+
+        // Отрисовка дороги (неоновая линия)
+        ctx.strokeStyle = '#00f3ff';
+        ctx.lineWidth = 3;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#00f3ff';
+        ctx.beginPath();
+        ctx.moveTo(0, 392);
+        ctx.lineTo(canvas.width, 392);
+        ctx.stroke();
+        ctx.shadowBlur = 0; // Сброс теней для оптимизации
+
+        // Отрисовка препятствий
+        obstacles.forEach(obs => {
+            ctx.fillStyle = '#ff0055';
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = '#ff0055';
+
+            if (obs.type === 'spike') {
+                ctx.beginPath();
+                ctx.moveTo(obs.x, obs.y + obs.height);
+                ctx.lineTo(obs.x + obs.width / 2, obs.y);
+                ctx.lineTo(obs.x + obs.width, obs.y + obs.height);
+                ctx.closePath();
+                ctx.fill();
+            } else {
+                ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
+            }
+            ctx.shadowBlur = 0;
+        });
+
+        // Отрисовка игрока
+        ctx.save();
+        ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
+        if (!player.grounded) {
+            ctx.rotate((player.rotation * Math.PI) / 180);
+        }
+        ctx.fillStyle = '#00f3ff';
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = '#00f3ff';
+        ctx.fillRect(-player.width / 2, -player.height / 2, player.width, player.height);
+        ctx.restore();
+        ctx.shadowBlur = 0;
+
+        // Отрисовка частиц
+        particles.forEach(p => {
+            ctx.fillStyle = p.color;
+            ctx.globalAlpha = p.alpha;
+            ctx.fillRect(p.x, p.y, p.size, p.size);
+            ctx.globalAlpha = 1;
+        });
+
+        // Интерфейс (UI)
+        if (gameState === 'PLAYING') {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 24px Segoe UI';
+            ctx.textAlign = 'left';
+            ctx.fillText(`СЧЕТ: ${Math.floor(score)}`, 25, 45);
+        } else if (gameState === 'START') {
+            ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#00f3ff';
+            ctx.font = 'bold 36px Segoe UI';
+            ctx.textAlign = 'center';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00f3ff';
+            ctx.fillText('NEON DASH: CUBE RUSH', canvas.width / 2, 160);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#9ca3af';
+            ctx.font = '18px Segoe UI';
+            ctx.fillText('Нажмите ПРОБЕЛ или ТАП для прыжка', canvas.width / 2, 220);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 20px Segoe UI';
+            ctx.fillText('КЛИКНИТЕ ЧТОБЫ НАЧАТЬ', canvas.width / 2, 290);
+        } else if (gameState === 'GAMEOVER') {
+            ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#ff0055';
+            ctx.font = 'bold 38px Segoe UI';
+            ctx.textAlign = 'center';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#ff0055';
+            ctx.fillText('ИГРА ОКОНЧЕНА', canvas.width / 2, 150);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '22px Segoe UI';
+            ctx.fillText(`Ваш счет: ${Math.floor(score)}`, canvas.width / 2, 210);
+            ctx.fillText(`Рекорд: ${highScore}`, canvas.width / 2, 250);
+
+            ctx.fillStyle = '#00f3ff';
+            ctx
+
+
+.font = 'bold 18px Segoe UI';
+            ctx.fillText('Кликните, чтобы играть снова', canvas.width / 2, 320);
+        }
+    }
+
+    function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+</script>
+
+</body>
+</html>
