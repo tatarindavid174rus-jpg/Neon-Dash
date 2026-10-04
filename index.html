@@ -41,23 +41,19 @@
     </div>
 
     <script>
-        // Инициализация VK Bridge
+        // Инициализация VK Bridge с защитой для локального тестирования
         if (typeof vkBridge !== 'undefined') {
             vkBridge.send('VKWebAppInit')
                 .then(() => console.log('VK Bridge initialized'))
                 .catch(err => console.log('VK Bridge init error:', err));
         }
 
-        // Функция показа рекламы
+        // Функция показа межстраничной рекламы при проигрыше
         function showInterstitialAd() {
             if (typeof vkBridge !== 'undefined') {
                 vkBridge.send('VKWebAppShowNativeAds', { ad_type: 'interstitial' })
-                    .then(data => {
-                        console.log('Реклама показана:', data.result);
-                    })
-                    .catch(error => {
-                        console.log('Реклама пропущена или ошибка (локальный режим):', error);
-                    });
+                    .then(data => console.log('Реклама показана:', data.result))
+                    .catch(error => console.log('Реклама пропущена или ошибка (локальный режим):', error));
             } else {
                 console.log('VK Bridge не найден (локальный запуск)');
             }
@@ -91,7 +87,7 @@
                     player.vy = player.jumpPower;
                     player.isJumping = true;
                 }
-            } else if (gameState === 'START' || gameState === 'GAMEOVER') {
+            } else {
                 resetGame();
                 gameState = 'PLAYING';
             }
@@ -127,13 +123,12 @@
             player.y += player.vy;
 
             if (player.y > 300) {
-                player.y = 3
-
-
-00;
+                player.y = 300;
                 player.vy = 0;
                 player.isJumping = false;
-            }
+
+
+}
 
             obstacleTimer++;
             if (obstacleTimer > 90) {
@@ -229,7 +224,7 @@
 
                 ctx.fillStyle = '#ff0055';
                 ctx.font = 'bold 36px Segoe UI';
-                ctx.textAlign.('center');
+                ctx.textAlign = 'center';
                 ctx.shadowBlur = 20;
                 ctx.shadowColor = '#ff0055';
                 ctx.fillText('ИГРА ОКОНЧЕНА', canvas.width / 2, canvas.height / 2 - 40);
@@ -238,11 +233,11 @@
                 ctx.fillStyle = '#ffffff';
                 ctx.font = '22px Segoe UI';
                 ctx.fillText(`Ваш счет: ${Math.floor(score)}`, canvas.width / 2, canvas.height / 2 + 10);
-
-
-ctx.font = '18px Segoe UI';
+                ctx.font = '18px Segoe UI';
                 ctx.fillStyle = '#00f3ff';
-                ctx.fillText('Нажмите, чтобы сыграть снова', canvas.width / 2, canvas.height / 2 + 50);
+
+
+ctx.fillText('Нажмите, чтобы сыграть снова', canvas.width / 2, canvas.height / 2 + 50);
                 ctx.textAlign = 'left';
             }
         }
