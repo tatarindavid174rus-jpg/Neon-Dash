@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Neon Dash: Cube Rush</title>
-    <!-- Подключение SDK Яндекс Игр -->
-    <script src="https://yandex.ru/games/sdk/v2"></script>
+    <!-- Подключение VK Bridge SDK для VK Игр -->
+    <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
     <style>
         * {
             box-sizing: border-box;
@@ -43,13 +43,29 @@
 </div>
 
 <script>
-    let ysdk = null;
+    // Инициализация VK Bridge
+    vkBridge.send('VKWebAppInit')
+        .then(() => {
+            console.log('VK Bridge initialized successfully');
+        })
+        .catch((error) => {
+            console.error('VK Bridge init error:', error);
+        });
 
-    // Инициализация SDK и отправка сигнала о готовности игры
-    YaGames.init().then(_ysdk => {
-        ysdk = _ysdk;
-        ysdk.features.LoadingAPI?.ready();
-    }).catch(err => console.error('SDK initialization error:', err));
+    // Функция показа рекламы в VK
+    function showVKAd() {
+        vkBridge.send('VKWebAppShowNativeAds', { ad_type: 'interstitial' })
+            .then((data) => {
+                if (data.result) {
+                    console.log('Реклама успешно показана');
+                } else {
+                    console.log('Реклама не была показана');
+                }
+            })
+            .catch((error) => {
+                console.error('Ошибка показа рекламы (возможно, частое срабатывание):', error);
+            });
+    }
 
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
@@ -107,7 +123,9 @@
         vy: 0,
         gravity: 0.8,
         jumpForce: -12.5,
-        grounded: false,
+
+
+grounded: false,
         rotation: 0
     };
 
@@ -127,15 +145,11 @@
 
     function spawnObstacle() {
         const types = ['spike', 'block', 'tall'];
-        const type = types[Math.floor(Math.random() * types
-
-.length)];
+        const type = types[Math.floor(Math.random() * types.length)];
         let obs = {
             x: canvas.width,
             width: 30,
-
-
-height: 35,
+            height: 35,
             y: 355,
             type: type
         };
@@ -217,7 +231,7 @@ height: 35,
                 player.y = 356;
                 player.vy = 0;
                 player.grounded = true;
-                player.rotation = Math.round(player.rotation / 90) * 90; // Выравнивание при приземлении
+                player.rotation = Math.round(player.rotation / 90) * 90;
             } else {
                 player.rotation += 6;
             }
@@ -243,8 +257,14 @@ height: 35,
                     playSound('hit');
                     addParticles(player.x + player.width / 2, player.y + player.height / 2, '#ff0055');
                     gameState = 'GAMEOVER';
+                    
+                    // Вызов рекламы при проигрыше
+                    showVKAd();
+
                     if (Math.floor(score) > highScore) {
-                        highScore = Math.floor(score);
+
+
+highScore = Math.floor(score);
                         localStorage.setItem('neon_dash_high', highScore);
                     }
                 }
@@ -265,16 +285,12 @@ height: 35,
             if (p.alpha <= 0) {
                 particles.splice(i, 1);
             }
-
-}
+        }
 
         // Обновление фона
         backgroundParticles.forEach(p => {
             p.x -= p.speed * (gameState === 'PLAYING' ? (gameSpeed / 5) : 0.5);
-            if (p.x < 0) p.x =
-
-
-canvas.width;
+            if (p.x < 0) p.x = canvas.width;
         });
     }
 
@@ -296,7 +312,7 @@ canvas.width;
         ctx.moveTo(0, 392);
         ctx.lineTo(canvas.width, 392);
         ctx.stroke();
-        ctx.shadowBlur = 0; // Сброс теней для оптимизации
+        ctx.shadowBlur = 0;
 
         // Отрисовка препятствий
         obstacles.forEach(obs => {
@@ -365,7 +381,10 @@ canvas.width;
             ctx.fillText('КЛИКНИТЕ ЧТОБЫ НАЧАТЬ', canvas.width / 2, 290);
         } else if (gameState === 'GAMEOVER') {
             ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillRect(0, 0, canvas.wi
+
+
+dth, canvas.height);
 
             ctx.fillStyle = '#ff0055';
             ctx.font = 'bold 38px Segoe UI';
@@ -381,9 +400,7 @@ canvas.width;
             ctx.fillText(`Рекорд: ${highScore}`, canvas.width / 2, 250);
 
             ctx.fillStyle = '#00f3ff';
-            ctx
-
-.font = 'bold 18px Segoe UI';
+            ctx.font = 'bold 18px Segoe UI';
             ctx.fillText('Кликните, чтобы играть снова', canvas.width / 2, 320);
         }
     }
