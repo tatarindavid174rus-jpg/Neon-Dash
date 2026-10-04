@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Neon Dash: Cube Rush</title>
-    <!-- Подключение VK Bridge SDK для VK Игр -->
+    <!-- Подключение VK Bridge -->
     <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
     <style>
         * {
@@ -25,6 +25,7 @@
         }
         #game-container {
             position: relative;
+            width: min(100vw, 800px);
             box-shadow: 0 0 40px rgba(0, 243, 255, 0.15);
             border-radius: 12px;
             overflow: hidden;
@@ -32,6 +33,8 @@
         }
         canvas {
             display: block;
+            width: 100%;
+            height: auto;
             background: linear-gradient(to bottom, #111827, #1f2937);
         }
     </style>
@@ -43,28 +46,40 @@
 </div>
 
 <script>
-    // Инициализация VK Bridge
-    vkBridge.send('VKWebAppInit')
-        .then(() => {
-            console.log('VK Bridge initialized successfully');
-        })
-        .catch((error) => {
-            console.error('VK Bridge init error:', error);
-        });
+    // ==================== VK BRIDGE ====================
+    // Инициализация VK Bridge (обязательный вызов для приложений ВКонтакте)
+    if (typeof vkBridge !== 'undefined') {
+        vkBridge.send('VKWebAppInit')
+            .then(() => console.log('VK Bridge готов'))
+            .catch(err => console.error('VK Bridge init error:', err));
+    } else {
+        console.warn('VK Bridge не загружен (локальный запуск) — реклама будет недоступна.');
+    }
 
-    // Функция показа рекламы в VK
-    function showVKAd() {
-        vkBridge.send('VKWebAppShowNativeAds', { ad_type: 'interstitial' })
-            .then((data) => {
-                if (data.result) {
-                    console.log('Реклама успешно показана');
-                } else {
-                    console.log('Реклама не была показана');
-                }
-            })
-            .catch((error) => {
-                console.error('Ошибка показа рекламы (возможно, частое срабатывание):', error);
-            });
+    /**
+     * Показ reward-рекламы ВКонтакте.
+     * Возвращает true, если пользователь досмотрел рекламу, иначе false.
+     */
+    async function showRewardedAd() {
+        if (typeof vkBridge === 'undefined') return false;
+
+        // 1. Проверяем, доступна ли реклама прямо сейчас
+        try {
+            await vkBridge.send('VKWebAppCheckNativeAds', { ad_format: 'reward' });
+        } catch (e) {
+            console.log('Reward-реклама сейчас недоступна:', e);
+            return false;
+        }
+
+        // 2. Показываем рекламу. Промис решится после досмотра,
+        //    или отклонится, если пользователь закрыл рекламу раньше времени.
+        try {
+            const data = await vkBridge.send('VKWebAppShowNativeAds', { ad_format: 'reward' });
+            return !!(data && data.result);
+        } catch (e) {
+            console.log('Реклама не досмотрена / ошибка показа:', e);
+            return false;
+        }
     }
 
     const canvas = document.getElementById('gameCanvas');
@@ -75,6 +90,9 @@
     function initAudio() {
         if (!audioCtx) {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
         }
     }
 
@@ -97,23 +115,36 @@
                 osc.stop(now + 0.15);
             } else if (type === 'hit') {
                 osc.type = 'sawtooth';
-                osc.frequency.setValueAtTime(120, now);
+                o
+
+
+sc.frequency.setValueAtTime(120, now);
                 osc.frequency.linearRampToValueAtTime(40, now + 0.3);
                 gain.gain.setValueAtTime(0.3, now);
                 gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
                 osc.start(now);
                 osc.stop(now + 0.3);
+            } else if (type === 'click') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(600, now);
+                gain.gain.setValueAtTime(0.08, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.08);
+                osc.start(now);
+                osc.stop(now + 0.08);
             }
         } catch (e) {
             // Игнорируем ошибки автозапуска аудиополитики браузера
         }
     }
 
-    // Игровые переменные
-    let gameState = 'START'; // START, PLAYING, GAMEOVER
+    // ==================== ИГРОВЫЕ ПЕРЕМЕННЫЕ ====================
+    // START, PLAYING, CONTINUE (вопрос про рекламу), AD (реклама показывается), GAMEOVER
+    let gameState = 'START';
     let score = 0;
     let highScore = localStorage.getItem('neon_dash_high') || 0;
     let gameSpeed = 5;
+    let canContinue = true;   // продолжение за рекламу доступно 1 раз за забег
+    let adNotice = '';        // сообщение на экране GAMEOVER, если реклама не показалась
 
     const player = {
         x: 100,
@@ -123,15 +154,17 @@
         vy: 0,
         gravity: 0.8,
         jumpForce: -12.5,
-
-
-grounded: false,
+        grounded: false,
         rotation: 0
     };
 
     let obstacles = [];
     let particles = [];
     let backgroundParticles = [];
+
+    // Кнопки "ДА" / "НЕТ" на экране продолжения
+    const btnYes = { x: 240, y: 300, w: 140, h: 52, text: 'ДА' };
+    const btnNo  = { x: 420, y: 300, w: 140, h: 52, text: 'НЕТ' };
 
     // Инициализация фоновых частиц
     for (let i = 0; i < 40; i++) {
@@ -180,6 +213,13 @@ grounded: false,
         }
     }
 
+    function saveHighScore() {
+        if (Math.floor(score) > highScore) {
+            highScore = Math.floor(score);
+            localStorage.setItem('neon_dash_high', highScore);
+        }
+    }
+
     function resetGame() {
         score = 0;
         gameSpeed = 5;
@@ -188,22 +228,96 @@ grounded: false,
         player.y = 320;
         player.vy = 0;
         player.rotation = 0;
+        player.grounded = false;
+        canContinue = true;
+        adNotice = '';
+        spawnTimer = 0;
         gameState = 'PLAYING';
     }
 
-    // Управление
+    // Пользователь нажал "ДА" — показываем рекламу и продолжаем с того же места
+    async function continueWithAd() {
+        gameState = 'AD';
+        const watched = await showRewardedAd();
+
+        if (watched) {
+            // Продолжаем: счет и скорость сохраняются, препятствия убираем,
+            // чтобы игрок не погиб сразу после рекламы
+            obstacles = [];
+            particles = [];
+            spawnTimer = 0;
+            player.y = 356;
+            player.vy = 0;
+            player.grou
+
+
+nded = true;
+            player.rotation = 0;
+            canContinue = false; // второй раз за забег продолжить нельзя
+            gameState = 'PLAYING';
+        } else {
+            // Реклама недоступна или закрыта раньше времени — обычный конец игры
+            finishGameOver('Реклама недоступна или закрыта — начните заново');
+        }
+    }
+
+    function finishGameOver(notice) {
+        adNotice = notice || '';
+        saveHighScore();
+        gameState = 'GAMEOVER';
+    }
+
+    // ==================== УПРАВЛЕНИЕ ====================
+    function getCanvasPos(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: (clientX - rect.left) * (canvas.width / rect.width),
+            y: (clientY - rect.top) * (canvas.height / rect.height)
+        };
+    }
+
+    function pointInButton(btn, x, y) {
+        return x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h;
+    }
+
     window.addEventListener('keydown', (e) => {
         if (e.code === 'Space' || e.code === 'ArrowUp') {
+            e.preventDefault();
             handleAction();
         }
     });
 
-    canvas.addEventListener('click', () => {
-        handleAction();
+    canvas.addEventListener('click', (e) => {
+        const pos = getCanvasPos(e.clientX, e.clientY);
+        handleAction(pos.x, pos.y);
     });
 
-    function handleAction() {
+    canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        const t = e.changedTouches[0];
+        const pos = getCanvasPos(t.clientX, t.clientY);
+        handleAction(pos.x, pos.y);
+    }, { passive: false });
+
+    function handleAction(x, y) {
         initAudio();
+
+        // Экран "Продолжить за рекламу?" — ждем клик по кнопкам
+        if (gameState === 'CONTINUE') {
+            if (x === undefined) return; // с клавиатуры здесь ничего не делаем
+            if (pointInButton(btnYes, x, y)) {
+                playSound('click');
+                continueWithAd();
+            } else if (pointInButton(btnNo, x, y)) {
+                playSound('click');
+                finishGameOver();
+            }
+            return;
+        }
+
+        // Пока идет реклама — игра на паузе, ввод игнорируем
+        if (gameState === 'AD') return;
+
         if (gameState === 'START' || gameState === 'GAMEOVER') {
             resetGame();
         } else if (gameState === 'PLAYING' && player.grounded) {
@@ -216,7 +330,7 @@ grounded: false,
 
     let spawnTimer = 0;
 
-    // Главный игровой цикл
+    // ==================== ГЛАВНЫЙ ЦИКЛ ====================
     function update() {
         if (gameState === 'PLAYING') {
             score += 0.05;
@@ -231,7 +345,7 @@ grounded: false,
                 player.y = 356;
                 player.vy = 0;
                 player.grounded = true;
-                player.rotation = Math.round(player.rotation / 90) * 90;
+                player.rotation = Math.round(player.rotation / 90) * 90; // Выравнивание при приземлении
             } else {
                 player.rotation += 6;
             }
@@ -255,18 +369,14 @@ grounded: false,
                     player.y + player.height > obstacles[i].y
                 ) {
                     playSound('hit');
-                    addParticles(player.x + player.width / 2, player.y + player.height / 2, '#ff0055');
-                    gameState = 'GAMEOVER';
-                    
-                    // Вызов рекламы при проигрыше
-                    showVKAd();
-
-                    if (Math.floor(score) > highScore) {
+                    addParticles(pl
 
 
-highScore = Math.floor(score);
-                        localStorage.setItem('neon_dash_high', highScore);
-                    }
+ayer.x + player.width / 2, player.y + player.height / 2, '#ff0055');
+                    saveHighScore();
+                    // Если продолжение еще не использовалось — предлагаем рекламу,
+                    // иначе сразу конец игры
+                    gameState = canContinue ? 'CONTINUE' : 'GAMEOVER';
                 }
 
                 // Удаление вышедших за экран
@@ -294,6 +404,23 @@ highScore = Math.floor(score);
         });
     }
 
+    function drawButton(btn, color) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = color;
+        ctx.strokeRect(btn.x, btn.y, btn.w, btn.h);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = color;
+        ctx.font = 'bold 20px Segoe UI';
+        ctx.textAlign = 'center';
+        ctx.fillText(btn.text, btn.x + btn.w / 2, btn.y + btn.h / 2 + 7);
+        ctx.restore();
+    }
+
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -312,7 +439,7 @@ highScore = Math.floor(score);
         ctx.moveTo(0, 392);
         ctx.lineTo(canvas.width, 392);
         ctx.stroke();
-        ctx.shadowBlur = 0;
+        ctx.shadowBlur = 0; // Сброс теней для оптимизации
 
         // Отрисовка препятствий
         obstacles.forEach(obs => {
@@ -354,7 +481,7 @@ highScore = Math.floor(score);
             ctx.globalAlpha = 1;
         });
 
-        // Интерфейс (UI)
+        // ==================== ИНТЕРФЕЙС (UI) ====================
         if (gameState === 'PLAYING') {
             ctx.fillStyle = '#ffffff';
             ctx.font = 'bold 24px Segoe UI';
@@ -362,7 +489,10 @@ highScore = Math.floor(score);
             ctx.fillText(`СЧЕТ: ${Math.floor(score)}`, 25, 45);
         } else if (gameState === 'START') {
             ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fill
+
+
+Rect(0, 0, canvas.width, canvas.height);
 
             ctx.fillStyle = '#00f3ff';
             ctx.font = 'bold 36px Segoe UI';
@@ -379,12 +509,52 @@ highScore = Math.floor(score);
             ctx.fillStyle = '#ffffff';
             ctx.font = 'bold 20px Segoe UI';
             ctx.fillText('КЛИКНИТЕ ЧТОБЫ НАЧАТЬ', canvas.width / 2, 290);
+        } else if (gameState === 'CONTINUE' || gameState === 'AD') {
+            ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.textAlign = 'center';
+
+            if (gameState === 'CONTINUE') {
+                ctx.fillStyle = '#ff0055';
+                ctx.font = 'bold 34px Segoe UI';
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#ff0055';
+                ctx.fillText('СТОЛКНОВЕНИЕ!', canvas.width / 2, 115);
+                ctx.shadowBlur = 0;
+
+                ctx.fillStyle = '#ffffff';
+                ctx.font = '20px Segoe UI';
+                ctx.fillText(`Счет: ${Math.floor(score)}`, canvas.width / 2, 160);
+
+                ctx.fillStyle = '#00f3ff';
+                ctx.font = 'bold 22px Segoe UI';
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = '#00f3ff';
+                ctx.fillText('Хотите продолжить с этого места', canvas.width / 2, 212);
+                ctx.fillText('за просмотр рекламы?', canvas.width / 2, 242);
+                ctx.shadowBlur = 0;
+
+                drawButton(btnYes, '#00f3ff');
+                drawButton(btnNo, '#ff0055');
+
+                ctx.fillStyle = '#9ca3af';
+                ctx.font = '14px Segoe UI';
+                ctx.fillText('«ДА» — смотрите рекламу и игра продолжится  •  «НЕТ» — игра начнется заново', canvas.width / 2, 392);
+            } else {
+                // Идет загрузка/показ рекламы
+                ctx.fillStyle = '#00f3ff';
+                ctx.font = 'bold 24px Segoe UI';
+                ctx.shadowBlur = 12;
+                ctx.shadowColor = '#00f3ff';
+                ctx.fillText('Загрузка рекламы...', canvas.width / 2, canvas.height / 2 - 10);
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = '#9ca3af';
+                ctx.font = '16px Segoe UI';
+                ctx.fillText('Досмотрите до конца, чтобы продолжить игру', canvas.width / 2, canvas.height / 2 + 25);
+            }
         } else if (gameState === 'GAMEOVER') {
             ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
-            ctx.fillRect(0, 0, canvas.wi
-
-
-dth, canvas.height);
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
             ctx.fillStyle = '#ff0055';
             ctx.font = 'bold 38px Segoe UI';
@@ -402,6 +572,12 @@ dth, canvas.height);
             ctx.fillStyle = '#00f3ff';
             ctx.font = 'bold 18px Segoe UI';
             ctx.fillText('Кликните, чтобы играть снова', canvas.width / 2, 320);
+
+            if (adNotice) {
+                ctx.fillStyle = '#9ca3af';
+                ctx.font = '14px Segoe UI';
+                ctx.fillText(adNotice, canvas.width / 2, 355);
+            }
         }
     }
 
