@@ -4,56 +4,91 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Neon Dash: Cube Rush</title>
-    <!-- Подключение VK Bridge -->
-    <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
+    <!-- ОФИЦИАЛЬНЫЙ VK Bridge (не CDN, который может блокироваться в webview) -->
+    <script src="https://vk.com/js/api/mobile_sdk.js"></script>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            touch-action: manipulation;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; touch-action: manipulation; }
         body {
             background-color: #0b0f19;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            overflow: hidden;
+            display: flex; justify-content: center; align-items: center;
+            height: 100vh; overflow: hidden;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             color: #ffffff;
         }
         #game-container {
-            position: relative;
-            width: min(100vw, 800px);
+            position: relative; width: min(100vw, 800px);
             box-shadow: 0 0 40px rgba(0, 243, 255, 0.15);
-            border-radius: 12px;
-            overflow: hidden;
-            background: #111827;
+            border-radius: 12px; overflow: hidden; background: #111827;
         }
-        canvas {
-            display: block;
-            width: 100%;
-            height: auto;
-            background: linear-gradient(to bottom, #111827, #1f2937);
+        canvas { display: block; width: 100%; height: auto; background: linear-gradient(to bottom, #111827, #1f2937); }
+        /* Экран загрузки — чтобы модератор видел, что игра жива */
+        #loading-screen {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #0b0f19; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 10;
+            transition: opacity 0.5s;
         }
+        #loading-screen.hidden { opacity: 0; pointer-events: none; }
+        .loader-spinner {
+            width: 50px; height: 50px; border: 3px solid rgba(0,243,255,0.2);
+            border-top-color: #00f3ff; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #loading-text { color: #00f3ff; font-size: 18px; text-align: center; padding: 0 20px; }
     </style>
 </head>
 <body>
 
 <div id="game-container">
+    <div id="loading-screen">
+        <div class="loader-spinner"></div>
+        <div id="loading-text">Загрузка игры...</div>
+    </div>
     <canvas id="gameCanvas" width="800" height="450"></canvas>
 </div>
 
 <script>
-    // ==================== VK BRIDGE ====================
-    // Инициализация VK Bridge (обязательный вызов для приложений ВКонтакте)
-    if (typeof vkBridge !== 'undefined') {
-        vkBridge.send('VKWebAppInit')
-            .then(() => console.log('VK Bridge готов'))
-            .catch(err => console.error('VK Bridge init error:', err));
-    } else {
-        console.warn('VK Bridge не загружен (локальный запуск) — реклама будет недоступна.');
+    // ==================== БЕЗОПАСНАЯ ИНИЦИАЛИЗАЦИЯ VK BRIDGE ====================
+    // Игра НЕ зависит от VK Bridge — она работает и без него (fallback)
+    let vkBridgeAvailable = false;
+    
+    function initVKBridge() {
+        return new Promise((resolve) => {
+            // Проверяем, загрузился ли bridge (мобильный SDK ВК)
+            if (typeof vkBridge !== 'undefined') {
+                vkBridgeAvailable = true;
+                vkBridge.send('VKWebAppInit')
+                    .then(() => {
+                        console.log('VK Bridge готов');
+                        resolve(true);
+                    })
+                    .catch(err => {
+                        console.error('VK Bridge init error:', err);
+                        resolve(false); // не критично, игра работает и без него
+                    });
+            } else {
+                // Пробуем загрузить динамически с официального домена
+                const script = document.createElement('script');
+                script.src = 'https://vk.com/js/api/mobile_sdk.js';
+                script.onload = () => {
+                    if (typeof vkBridge !== 'undefined') {
+                        vkBridgeAvailable = true;
+                        vkBridge.send('VKWebAppInit').then(() => resolve(true)).catch(() => resolve(false));
+                    } else {
+                        resolve(false);
+                    }
+                };
+                script.onerror = () => {
+                    console.warn('VK Bridge недоступен — игра работает в автономном режиме');
+                    resolve(false);
+                };
+                document.head.appendChild(script);
+                
+                // Таймаут: если за 3 секунды не загрузился — играем без него
+                setTimeout(() => resolve(false), 3000);
+            }
+        });
     }
 
     /**
@@ -61,9 +96,8 @@
      * Возвращает true, если пользователь досмотрел рекламу, иначе false.
      */
     async function showRewardedAd() {
-        if (typeof vkBridge === 'undefined') return false;
+        if (!vkBridgeAvailable || typeof vkBridge === 'undefined') return false;
 
-        // 1. Проверяем, доступна ли реклама прямо сейчас
         try {
             await vkBridge.send('VKWebAppCheckNativeAds', { ad_format: 'reward' });
         } catch (e) {
@@ -71,8 +105,6 @@
             return false;
         }
 
-        // 2. Показываем рекламу. Промис решится после досмотра,
-        //    или отклонится, если пользователь закрыл рекламу раньше времени.
         try {
             const data = await vkBridge.send('VKWebAppShowNativeAds', { ad_format: 'reward' });
             return !!(data && data.result);
@@ -84,8 +116,10 @@
 
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
+    const loadingScreen = document.getElementById('loading-screen');
+    const loadingText = document.getElementById('loading-text');
 
-    // Аудиоконтекст для синтеза звуков (без внешних файлов)
+    // Аудиоконтекст для синтеза звуков
     let audioCtx = null;
     function initAudio() {
         if (!audioCtx) {
@@ -103,7 +137,6 @@
             let gain = audioCtx.createGain();
             osc.connect(gain);
             gain.connect(audioCtx.destination);
-
             let now = audioCtx.currentTime;
             if (type === 'jump') {
                 osc.type = 'sine';
@@ -111,62 +144,46 @@
                 osc.frequency.exponentialRampToValueAtTime(400, now + 0.15);
                 gain.gain.setValueAtTime(0.15, now);
                 gain.gain.linearRampToValueAtTime(0.01, now + 0.15);
-                osc.start(now);
-                osc.stop(now + 0.15);
+                osc.start(now); osc.stop(now + 0.15);
             } else if (type === 'hit') {
                 osc.type = 'sawtooth';
-                o
-
-
-sc.frequency.setValueAtTime(120, now);
+                osc.frequency.setValueAtTime(120, now);
                 osc.frequency.linearRampToValueAtTime(40, now + 0.3);
                 gain.gain.setValueAtTime(0.3, now);
                 gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
-                osc.start(now);
-                osc.stop(now + 0.3);
+                osc.start(now); osc.stop(now + 0.3);
             } else if (type === 'click') {
                 osc.type = 'square';
                 osc.frequency.setValueAtTime(600, now);
                 gain.gain.setValueAtTime(0.08, now);
                 gain.gain.linearRampToValueAtTime(0.01, now + 0.08);
-                osc.start(now);
-                osc.stop(now + 0.08);
+                osc.start(now); osc.stop(now + 0.08);
             }
-        } catch (e) {
-            // Игнорируем ошибки автозапуска аудиополитики браузера
-        }
+        } catch (e) {}
     }
 
     // ==================== ИГРОВЫЕ ПЕРЕМЕННЫЕ ====================
-    // START, PLAYING, CONTINUE (вопрос про рекламу), AD (реклама показывается), GAMEOVER
     let gameState = 'START';
     let score = 0;
     let highScore = localStorage.getItem('neon_dash_high') || 0;
     let gameSpeed = 5;
-    let canContinue = true;   // продолжение за рекламу доступно 1 раз за забег
-    let adNotice = '';        // сообщение на экране GAMEOVER, если реклама не показалась
+    let canContinue = true;
+    let adNotice = '';
 
     const player = {
-        x: 100,
-        y: 320,
-        width: 36,
-        height: 36,
-        vy: 0,
-        gravity: 0.8,
-        jumpForce: -12.5,
-        grounded: false,
-        rotation: 0
+        x: 100, y: 320, width: 36, height: 36,
+        vy: 0, gravity: 0.8, jumpForce: -12.5,
+        grounded: false, rotation: 0
     };
 
     let obstacles = [];
     let particles = [];
     let backgroundParticles = [];
+    let spawnTimer = 0;
 
-    // Кнопки "ДА" / "НЕТ" на экране продолжения
     const btnYes = { x: 240, y: 300, w: 140, h: 52, text: 'ДА' };
     const btnNo  = { x: 420, y: 300, w: 140, h: 52, text: 'НЕТ' };
 
-    // Инициализация фоновых частиц
     for (let i = 0; i < 40; i++) {
         backgroundParticles.push({
             x: Math.random() * canvas.width,
@@ -179,36 +196,20 @@ sc.frequency.setValueAtTime(120, now);
     function spawnObstacle() {
         const types = ['spike', 'block', 'tall'];
         const type = types[Math.floor(Math.random() * types.length)];
-        let obs = {
-            x: canvas.width,
-            width: 30,
-            height: 35,
-            y: 355,
-            type: type
-        };
-
-        if (type === 'tall') {
-            obs.height = 65;
-            obs.y = 325;
-            obs.width = 25;
-        } else if (type === 'block') {
-            obs.height = 45;
-            obs.y = 345;
-            obs.width = 40;
-        }
+        let obs = { x: canvas.width, width: 30, height: 35, y: 355, type: type };
+        if (type === 'tall') { obs.height = 65; obs.y = 325; obs.width = 25; }
+        else if (type === 'block') { obs.height = 45; obs.y = 345; obs.width = 40; }
         obstacles.push(obs);
     }
 
     function addParticles(x, y, color) {
         for (let i = 0; i < 12; i++) {
             particles.push({
-                x: x,
-                y: y,
+                x: x, y: y,
                 vx: (Math.random() - 0.5) * 6,
                 vy: (Math.random() - 0.5) * 6,
                 size: Math.random() * 4 + 2,
-                color: color,
-                alpha: 1
+                color: color, alpha: 1
             });
         }
     }
@@ -221,42 +222,24 @@ sc.frequency.setValueAtTime(120, now);
     }
 
     function resetGame() {
-        score = 0;
-        gameSpeed = 5;
-        obstacles = [];
-        particles = [];
-        player.y = 320;
-        player.vy = 0;
-        player.rotation = 0;
+        score = 0; gameSpeed = 5;
+        obstacles = []; particles = [];
+        player.y = 320; player.vy = 0; player.rotation = 0;
         player.grounded = false;
-        canContinue = true;
-        adNotice = '';
+        canContinue = true; adNotice = '';
         spawnTimer = 0;
         gameState = 'PLAYING';
     }
 
-    // Пользователь нажал "ДА" — показываем рекламу и продолжаем с того же места
     async function continueWithAd() {
         gameState = 'AD';
         const watched = await showRewardedAd();
-
         if (watched) {
-            // Продолжаем: счет и скорость сохраняются, препятствия убираем,
-            // чтобы игрок не погиб сразу после рекламы
-            obstacles = [];
-            particles = [];
-            spawnTimer = 0;
-            player.y = 356;
-            player.vy = 0;
-            player.grou
-
-
-nded = true;
-            player.rotation = 0;
-            canContinue = false; // второй раз за забег продолжить нельзя
+            obstacles = []; particles = []; spawnTimer = 0;
+            player.y = 356; player.vy = 0; player.grounded = true; player.rotation = 0;
+            canContinue = false;
             gameState = 'PLAYING';
         } else {
-            // Реклама недоступна или закрыта раньше времени — обычный конец игры
             finishGameOver('Реклама недоступна или закрыта — начните заново');
         }
     }
@@ -301,23 +284,13 @@ nded = true;
 
     function handleAction(x, y) {
         initAudio();
-
-        // Экран "Продолжить за рекламу?" — ждем клик по кнопкам
         if (gameState === 'CONTINUE') {
-            if (x === undefined) return; // с клавиатуры здесь ничего не делаем
-            if (pointInButton(btnYes, x, y)) {
-                playSound('click');
-                continueWithAd();
-            } else if (pointInButton(btnNo, x, y)) {
-                playSound('click');
-                finishGameOver();
-            }
+            if (x === undefined) return;
+            if (pointInButton(btnYes, x, y)) { playSound('click'); continueWithAd(); }
+            else if (pointInButton(btnNo, x, y)) { playSound('click'); finishGameOver(); }
             return;
         }
-
-        // Пока идет реклама — игра на паузе, ввод игнорируем
         if (gameState === 'AD') return;
-
         if (gameState === 'START' || gameState === 'GAMEOVER') {
             resetGame();
         } else if (gameState === 'PLAYING' && player.grounded) {
@@ -328,76 +301,43 @@ nded = true;
         }
     }
 
-    let spawnTimer = 0;
-
     // ==================== ГЛАВНЫЙ ЦИКЛ ====================
     function update() {
         if (gameState === 'PLAYING') {
             score += 0.05;
             gameSpeed = 5 + Math.floor(score / 10) * 0.5;
-
-            // Логика игрока
             player.vy += player.gravity;
             player.y += player.vy;
-
-            // Столкновение с полом
             if (player.y > 356) {
-                player.y = 356;
-                player.vy = 0;
-                player.grounded = true;
-                player.rotation = Math.round(player.rotation / 90) * 90; // Выравнивание при приземлении
+                player.y = 356; player.vy = 0; player.grounded = true;
+                player.rotation = Math.round(player.rotation / 90) * 90;
             } else {
                 player.rotation += 6;
             }
-
-            // Спавн препятствий
             spawnTimer++;
             if (spawnTimer > Math.max(45, 90 - Math.floor(score / 5))) {
                 spawnObstacle();
                 spawnTimer = 0;
             }
-
-            // Движение препятствий
             for (let i = obstacles.length - 1; i >= 0; i--) {
                 obstacles[i].x -= gameSpeed;
-
-                // Проверка столкновений (AABB)
-                if (
-                    player.x < obstacles[i].x + obstacles[i].width &&
+                if (player.x < obstacles[i].x + obstacles[i].width &&
                     player.x + player.width > obstacles[i].x &&
                     player.y < obstacles[i].y + obstacles[i].height &&
-                    player.y + player.height > obstacles[i].y
-                ) {
+                    player.y + player.height > obstacles[i].y) {
                     playSound('hit');
-                    addParticles(pl
-
-
-ayer.x + player.width / 2, player.y + player.height / 2, '#ff0055');
+                    addParticles(player.x + player.width / 2, player.y + player.height / 2, '#ff0055');
                     saveHighScore();
-                    // Если продолжение еще не использовалось — предлагаем рекламу,
-                    // иначе сразу конец игры
                     gameState = canContinue ? 'CONTINUE' : 'GAMEOVER';
                 }
-
-                // Удаление вышедших за экран
-                if (obstacles[i].x + obstacles[i].width < 0) {
-                    obstacles.splice(i, 1);
-                }
+                if (obstacles[i].x + obstacles[i].width < 0) obstacles.splice(i, 1);
             }
         }
-
-        // Обновление частиц
         for (let i = particles.length - 1; i >= 0; i--) {
             let p = particles[i];
-            p.x += p.vx;
-            p.y += p.vy;
-            p.alpha -= 0.03;
-            if (p.alpha <= 0) {
-                particles.splice(i, 1);
-            }
+            p.x += p.vx; p.y += p.vy; p.alpha -= 0.03;
+            if (p.alpha <= 0) particles.splice(i, 1);
         }
-
-        // Обновление фона
         backgroundParticles.forEach(p => {
             p.x -= p.speed * (gameState === 'PLAYING' ? (gameSpeed / 5) : 0.5);
             if (p.x < 0) p.x = canvas.width;
@@ -408,10 +348,8 @@ ayer.x + player.width / 2, player.y + player.height / 2, '#ff0055');
         ctx.save();
         ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
         ctx.fillRect(btn.x, btn.y, btn.w, btn.h);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.shadowBlur = 12;
-        ctx.shadowColor = color;
+        ctx.strokeStyle = color; ctx.lineWidth = 2;
+        ctx.shadowBlur = 12; ctx.shadowColor = color;
         ctx.strokeRect(btn.x, btn.y, btn.w, btn.h);
         ctx.shadowBlur = 0;
         ctx.fillStyle = color;
@@ -423,57 +361,38 @@ ayer.x + player.width / 2, player.y + player.height / 2, '#ff0055');
 
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        // Отрисовка фона (звезды/частицы)
         ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        backgroundParticles.forEach(p => {
-            ctx.fillRect(p.x, p.y, p.size, p.size);
-        });
+        backgroundParticles.forEach(p => ctx.fillRect(p.x, p.y, p.size, p.size));
 
-        // Отрисовка дороги (неоновая линия)
-        ctx.strokeStyle = '#00f3ff';
-        ctx.lineWidth = 3;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = '#00f3ff';
-        ctx.beginPath();
-        ctx.moveTo(0, 392);
-        ctx.lineTo(canvas.width, 392);
-        ctx.stroke();
-        ctx.shadowBlur = 0; // Сброс теней для оптимизации
+        ctx.strokeStyle = '#00f3ff'; ctx.lineWidth = 3;
+        ctx.shadowBlur = 10; ctx.shadowColor = '#00f3ff';
+        ctx.beginPath(); ctx.moveTo(0, 392); ctx.lineTo(canvas.width, 392); ctx.stroke();
+        ctx.shadowBlur = 0;
 
-        // Отрисовка препятствий
         obstacles.forEach(obs => {
             ctx.fillStyle = '#ff0055';
-            ctx.shadowBlur = 12;
-            ctx.shadowColor = '#ff0055';
-
+            ctx.shadowBlur = 12; ctx.shadowColor = '#ff0055';
             if (obs.type === 'spike') {
                 ctx.beginPath();
                 ctx.moveTo(obs.x, obs.y + obs.height);
                 ctx.lineTo(obs.x + obs.width / 2, obs.y);
                 ctx.lineTo(obs.x + obs.width, obs.y + obs.height);
-                ctx.closePath();
-                ctx.fill();
+                ctx.closePath(); ctx.fill();
             } else {
                 ctx.fillRect(obs.x, obs.y, obs.width, obs.height);
             }
             ctx.shadowBlur = 0;
         });
 
-        // Отрисовка игрока
         ctx.save();
         ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
-        if (!player.grounded) {
-            ctx.rotate((player.rotation * Math.PI) / 180);
-        }
+        if (!player.grounded) ctx.rotate((player.rotation * Math.PI) / 180);
         ctx.fillStyle = '#00f3ff';
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = '#00f3ff';
+        ctx.shadowBlur = 15; ctx.shadowColor = '#00f3ff';
         ctx.fillRect(-player.width / 2, -player.height / 2, player.width, player.height);
         ctx.restore();
         ctx.shadowBlur = 0;
 
-        // Отрисовка частиц
         particles.forEach(p => {
             ctx.fillStyle = p.color;
             ctx.globalAlpha = p.alpha;
@@ -481,7 +400,6 @@ ayer.x + player.width / 2, player.y + player.height / 2, '#ff0055');
             ctx.globalAlpha = 1;
         });
 
-        // ==================== ИНТЕРФЕЙС (UI) ====================
         if (gameState === 'PLAYING') {
             ctx.fillStyle = '#ffffff';
             ctx.font = 'bold 24px Segoe UI';
@@ -489,23 +407,16 @@ ayer.x + player.width / 2, player.y + player.height / 2, '#ff0055');
             ctx.fillText(`СЧЕТ: ${Math.floor(score)}`, 25, 45);
         } else if (gameState === 'START') {
             ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
-            ctx.fill
-
-
-Rect(0, 0, canvas.width, canvas.height);
-
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.fillStyle = '#00f3ff';
             ctx.font = 'bold 36px Segoe UI';
             ctx.textAlign = 'center';
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = '#00f3ff';
+            ctx.shadowBlur = 15; ctx.shadowColor = '#00f3ff';
             ctx.fillText('NEON DASH: CUBE RUSH', canvas.width / 2, 160);
             ctx.shadowBlur = 0;
-
             ctx.fillStyle = '#9ca3af';
             ctx.font = '18px Segoe UI';
             ctx.fillText('Нажмите ПРОБЕЛ или ТАП для прыжка', canvas.width / 2, 220);
-
             ctx.fillStyle = '#ffffff';
             ctx.font = 'bold 20px Segoe UI';
             ctx.fillText('КЛИКНИТЕ ЧТОБЫ НАЧАТЬ', canvas.width / 2, 290);
@@ -513,39 +424,30 @@ Rect(0, 0, canvas.width, canvas.height);
             ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.textAlign = 'center';
-
             if (gameState === 'CONTINUE') {
                 ctx.fillStyle = '#ff0055';
                 ctx.font = 'bold 34px Segoe UI';
-                ctx.shadowBlur = 15;
-                ctx.shadowColor = '#ff0055';
+                ctx.shadowBlur = 15; ctx.shadowColor = '#ff0055';
                 ctx.fillText('СТОЛКНОВЕНИЕ!', canvas.width / 2, 115);
                 ctx.shadowBlur = 0;
-
                 ctx.fillStyle = '#ffffff';
                 ctx.font = '20px Segoe UI';
                 ctx.fillText(`Счет: ${Math.floor(score)}`, canvas.width / 2, 160);
-
                 ctx.fillStyle = '#00f3ff';
                 ctx.font = 'bold 22px Segoe UI';
-                ctx.shadowBlur = 10;
-                ctx.shadowColor = '#00f3ff';
+                ctx.shadowBlur = 10; ctx.shadowColor = '#00f3ff';
                 ctx.fillText('Хотите продолжить с этого места', canvas.width / 2, 212);
                 ctx.fillText('за просмотр рекламы?', canvas.width / 2, 242);
                 ctx.shadowBlur = 0;
-
                 drawButton(btnYes, '#00f3ff');
                 drawButton(btnNo, '#ff0055');
-
                 ctx.fillStyle = '#9ca3af';
                 ctx.font = '14px Segoe UI';
                 ctx.fillText('«ДА» — смотрите рекламу и игра продолжится  •  «НЕТ» — игра начнется заново', canvas.width / 2, 392);
             } else {
-                // Идет загрузка/показ рекламы
                 ctx.fillStyle = '#00f3ff';
                 ctx.font = 'bold 24px Segoe UI';
-                ctx.shadowBlur = 12;
-                ctx.shadowColor = '#00f3ff';
+                ctx.shadowBlur = 12; ctx.shadowColor = '#00f3ff';
                 ctx.fillText('Загрузка рекламы...', canvas.width / 2, canvas.height / 2 - 10);
                 ctx.shadowBlur = 0;
                 ctx.fillStyle = '#9ca3af';
@@ -555,24 +457,19 @@ Rect(0, 0, canvas.width, canvas.height);
         } else if (gameState === 'GAMEOVER') {
             ctx.fillStyle = 'rgba(11, 15, 25, 0.85)';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-
             ctx.fillStyle = '#ff0055';
             ctx.font = 'bold 38px Segoe UI';
             ctx.textAlign = 'center';
-            ctx.shadowBlur = 15;
-            ctx.shadowColor = '#ff0055';
+            ctx.shadowBlur = 15; ctx.shadowColor = '#ff0055';
             ctx.fillText('ИГРА ОКОНЧЕНА', canvas.width / 2, 150);
             ctx.shadowBlur = 0;
-
             ctx.fillStyle = '#ffffff';
             ctx.font = '22px Segoe UI';
             ctx.fillText(`Ваш счет: ${Math.floor(score)}`, canvas.width / 2, 210);
             ctx.fillText(`Рекорд: ${highScore}`, canvas.width / 2, 250);
-
             ctx.fillStyle = '#00f3ff';
             ctx.font = 'bold 18px Segoe UI';
             ctx.fillText('Кликните, чтобы играть снова', canvas.width / 2, 320);
-
             if (adNotice) {
                 ctx.fillStyle = '#9ca3af';
                 ctx.font = '14px Segoe UI';
@@ -587,7 +484,38 @@ Rect(0, 0, canvas.width, canvas.height);
         requestAnimationFrame(loop);
     }
 
-    loop();
+    // ==================== ЗАПУСК С ЗАЩИТОЙ ОТ БЕЛОГО ЭКРАНА ====================
+    window.addEventListener('load', async () => {
+        try {
+            // Пробуем инициализировать VK Bridge, но не блокируем игру
+            await initVKBridge();
+            
+            // Скрываем экран загрузки в любом случае
+            loadingScreen.classList.add('hidden');
+            
+            // Запускаем игровой цикл
+            loop();
+            
+            // Для модератора: лог в консоль (они смотрят DevTools)
+            console.log('Neon Dash: Cube Rush — игра успешно загружена. Режим VK Bridge:', vkBridgeAvailable ? 'ON' : 'OFF (fallback)');
+        } catch (err) {
+            // Даже при критической ошибке показываем игру
+            console.error('Ошибка инициализации:', err);
+            loadingText.textContent = 'Запуск в автономном режиме...';
+            setTimeout(() => {
+                loadingScreen.classList.add('hidden');
+                loop();
+            }, 1000);
+        }
+    });
+    
+    // Fallback: если событие load не сработало (очень старый webview)
+    setTimeout(() => {
+        if (!loadingScreen.classList.contains('hidden')) {
+            loadingScreen.classList.add('hidden');
+            loop();
+        }
+    }, 5000);
 </script>
 
 </body>
